@@ -18,7 +18,7 @@ onclick="downloadManualXlsx()"
 <b>Download Excel</b>
 <small>Data PM, CM, dan dokumentasi foto</small>
 </button><button class="q" onclick="toast('Simulasi email berhasil dikirim')"><span class="qi">✉</span><b>Kirim Email Sekarang</b><small>Pengiriman manual</small></button><button class="q" onclick="showSchedule()"><span class="qi">◷</span><b>Jadwal Otomatis</b><small>Setiap hari 07.30 WIB</small></button><button class="q" onclick="resetDemo()"><span class="qi">⌫</span><b>Muat Ulang Data Demo</b><small>Isi contoh PM dan CM</small></button></div><div class="card"><div id="reporttable"></div></div></section>
-</main></div><button class="fab" onclick="go('pm')">＋</button><nav class="bottom"><button class="active" onclick="mob('home',this)"><span>⌂</span>Home</button><button onclick="mob('pm',this)"><span>✓</span>PM</button><button onclick="mob('cm',this)"><span>⚒</span>CM</button><button onclick="mob('jobs',this)"><span>☷</span>Jobs</button><button onclick="mob('report',this)"><span>▤</span>Report</button></nav><div id="modal" class="modal hide" onclick="if(event.target===this)closeM()"><div class="modalbox"><div class="modalhead"><h3 id="mt">Detail</h3><button class="x" onclick="closeM()">×</button></div><div id="mb"></div><div class="actions"><button class="btn" onclick="closeM()">Tutup</button><button class="btn primary" onclick="closeM();go('cm')">Tindak Lanjut CM</button></div></div></div><div id="toast" class="toast hide"></div><script src="./config.js"></script><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script>
+</main></div><button class="fab" onclick="go('pm')">＋</button><nav class="bottom"><button class="active" onclick="mob('home',this)"><span>⌂</span>Home</button><button onclick="mob('pm',this)"><span>✓</span>PM</button><button onclick="mob('cm',this)"><span>⚒</span>CM</button><button onclick="mob('jobs',this)"><span>☷</span>Jobs</button><button onclick="mob('report',this)"><span>▤</span>Report</button></nav><div id="modal" class="modal hide" onclick="if(event.target===this)closeM()"><div class="modalbox"><div class="modalhead"><h3 id="mt">Detail</h3><button class="x" onclick="closeM()">×</button></div><div id="mb"></div><div class="actions"><button class="btn" onclick="closeM()">Tutup</button><button class="btn primary" onclick="closeM();go('cm')">Tindak Lanjut CM</button></div></div></div><div id="toast" class="toast hide"></div><script src="./config.js"></script><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script><script>
 'use strict';
 const el=id=>document.getElementById(id), clean=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const cfg=window.PIM_CONFIG||{};
@@ -57,13 +57,55 @@ function resetDemo(){toast('Data online tidak direset dari aplikasi.')}
 function csv(){const h=['Nomor','Jenis','Tanggal','Functional Location','Deskripsi Lokasi','Petugas','Prioritas','Status','Deskripsi','Tindakan'],q=v=>'"'+String(v??'').replaceAll('"','""')+'"',a=[h.map(q).join(',')];D.forEach(r=>a.push([r.report_no,r.type,r.date,r.fun,r.funDesc,r.person,r.priority,r.status,r.desc,r.action].map(q).join(',')));const b=new Blob(['\ufeff'+a.join('\n')],{type:'text/csv'}),x=document.createElement('a');x.href=URL.createObjectURL(b);x.download='PIM_PM_CM_Report.csv';x.click();toast('Laporan diunduh')}
 function toast(t){const x=el('toast');x.textContent=t;x.classList.remove('hide');setTimeout(()=>x.classList.add('hide'),3000)}
 function updateAll(){loadFunlocOptions();dash();render();refs()}
+
+
+async function manualBlobToDataUrl(blob){
+  return await new Promise((resolve,reject)=>{
+    const img=new Image(),url=URL.createObjectURL(blob);
+    img.onload=()=>{try{const maxW=500,maxH=360,scale=Math.min(maxW/img.naturalWidth,maxH/img.naturalHeight,1),w=Math.round(img.naturalWidth*scale),h=Math.round(img.naturalHeight*scale),canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);ctx.drawImage(img,0,0,w,h);URL.revokeObjectURL(url);resolve(canvas.toDataURL('image/jpeg',0.6))}catch(err){URL.revokeObjectURL(url);reject(err)}};
+    img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Foto tidak dapat dibaca'))};img.src=url;
+  });
+}
+
+async function manualPhoto(path){
+  if(!path)return null;
+  const {data,error}=await db.storage.from(cfg.PHOTO_BUCKET||'maintenance-photos').download(path);
+  if(error||!data){console.warn('Foto gagal:',path,error?.message);return null}
+  try{return await manualBlobToDataUrl(data)}catch(err){console.warn('Foto gagal diproses:',path,err.message);return null}
+}
+
+function manualGroups(reports,photos){
+  const pms=reports.filter(r=>r.report_type==='PM'),cms=reports.filter(r=>r.report_type==='CM'),used=new Set(),groups=[];
+  const make=(pm,cmList)=>{const all=[...(pm?[pm]:[]),...cmList],pics=all.flatMap(r=>photos.filter(p=>p.report_id===r.id)),latest=cmList.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))[0]||pm,fun=funlocMaster.find(f=>f.id===(pm?.funloc_id||latest?.funloc_id));return{pm,cms:cmList,fun,numbers:[pm?.report_no,...cmList.map(x=>x.report_no)].filter(Boolean).join(' -> '),date:pm?.created_at||latest?.created_at,status:latest?.status||'',priority:latest?.priority||pm?.priority||'',description:pm?.description||latest?.description||'',recommendation:pm?.recommendation||'',action:latest?.corrective_action||'',spare:latest?.spare_part||'',person:profiles.find(x=>x.id===(latest?.assigned_to||pm?.created_by))?.full_name||'',initial:pics.filter(x=>['pm','initial','before','documentation','pm_inspection'].includes(String(x.photo_type||'').toLowerCase())),result:pics.filter(x=>['cm','result','after','process','cm_result'].includes(String(x.photo_type||'').toLowerCase())),verification:pics.filter(x=>['verification','verified','approval'].includes(String(x.photo_type||'').toLowerCase()))}};
+  for(const pm of pms){const related=cms.filter(cm=>cm.pm_reference===pm.id);related.forEach(cm=>used.add(cm.id));groups.push(make(pm,related))}
+  for(const cm of cms){if(used.has(cm.id))continue;const pm=pms.filter(x=>x.funloc_id===cm.funloc_id).sort((a,b)=>Math.abs(new Date(cm.created_at)-new Date(a.created_at))-Math.abs(new Date(cm.created_at)-new Date(b.created_at)))[0]||null;if(pm){const g=groups.find(x=>x.pm?.id===pm.id);if(g){g.cms.push(cm);used.add(cm.id);const replacement=make(pm,g.cms);Object.assign(g,replacement);continue}}groups.push(make(null,[cm]));used.add(cm.id)}
+  return groups.sort((a,b)=>new Date(b.date)-new Date(a.date));
+}
+
+function manualBorder(cell){const side={style:'thin',color:{argb:'FFD7DEE7'}};cell.border={top:side,left:side,bottom:side,right:side}}
+
+async function downloadManualXlsx(){
+  const button=el('manualDownloadButton');if(button){button.disabled=true;button.dataset.text=button.innerHTML;button.innerHTML='<b>Menyiapkan laporan...</b>'}
+  try{
+    if(!window.ExcelJS)throw new Error('ExcelJS belum termuat');
+    const [rr,ph]=await Promise.all([db.from('work_reports').select('*').order('created_at',{ascending:false}).limit(100),db.from('report_photos').select('*').order('created_at')]);
+    if(rr.error)throw rr.error;if(ph.error)throw ph.error;
+    const groups=manualGroups(rr.data||[],ph.data||[]),wb=new ExcelJS.Workbook();wb.creator='PIM Maintenance Hub';
+    const ws=wb.addWorksheet('Maintenance Report',{views:[{state:'frozen',ySplit:1,showGridLines:false}]});
+    const heads=['No.','Nomor PM / CM','Tanggal','Functional Location','Deskripsi Lokasi','Area','Prioritas','Temuan','Rekomendasi PM','Status Akhir','Petugas','Tindakan Perbaikan','Spare Part'];
+    const widths=[7,42,22,42,30,18,14,40,35,20,22,40,28];ws.columns=heads.map((h,i)=>({header:h,key:'c'+i,width:widths[i]}));ws.getRow(1).height=34;ws.getRow(1).eachCell(c=>{c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF163A5F'}};c.font={bold:true,color:{argb:'FFFFFFFF'}};c.alignment={horizontal:'center',vertical:'middle',wrapText:true};manualBorder(c)});
+    groups.forEach((g,i)=>{const row=ws.addRow([i+1,g.numbers,new Date(g.date).toLocaleString('id-ID'),g.fun?.funloc_code||'',g.fun?.description||'',g.fun?.area||'',g.priority,g.description,g.recommendation,g.status,g.person,g.action,g.spare]);row.height=45;row.eachCell({includeEmpty:true},c=>{c.alignment={vertical:'top',wrapText:true};manualBorder(c)})});ws.autoFilter={from:'A1',to:'M'+(groups.length+1)};
+    const doc=wb.addWorksheet('Dokumentasi',{views:[{showGridLines:false}]});doc.getColumn('A').width=34;doc.getColumn('B').width=4;doc.getColumn('C').width=34;doc.getColumn('D').width=4;doc.getColumn('E').width=34;const cats=[['initial','Kondisi Awal',1],['result','Hasil Pekerjaan',3],['verification','Verifikasi',5]];
+    for(let i=0;i<groups.length;i++){const g=groups[i],start=i*13+1;doc.mergeCells(start,1,start,5);const title=doc.getCell(start,1);title.value=`${g.numbers} - ${g.fun?.funloc_code||''}`;title.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF163A5F'}};title.font={bold:true,color:{argb:'FFFFFFFF'}};doc.getRow(start).height=24;
+      for(const [key,label,col] of cats){const h=doc.getCell(start+1,col);h.value=label;h.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF367F78'}};h.font={bold:true,color:{argb:'FFFFFFFF'}};h.alignment={horizontal:'center'};for(let r=start+2;r<=start+10;r++){doc.getRow(r).height=16;manualBorder(doc.getCell(r,col))}const photo=g[key][0];if(!photo){const c=doc.getCell(start+6,col);c.value='Foto belum tersedia';c.alignment={horizontal:'center'};continue}const dataUrl=await manualPhoto(photo.storage_path);if(!dataUrl){doc.getCell(start+6,col).value='Foto tidak dapat dimuat';continue}const id=wb.addImage({base64:dataUrl,extension:'jpeg'});doc.addImage(id,{tl:{col:col-1+0.08,row:start+1.12},ext:{width:215,height:145},editAs:'oneCell'})}
+      doc.mergeCells(start+11,1,start+11,5);doc.getCell(start+11,1).value=`Temuan: ${g.description} | Status Akhir: ${g.status}`;doc.getCell(start+11,1).alignment={wrapText:true};doc.getRow(start+11).height=24;doc.getRow(start+12).height=8;
+    }
+    const buffer=await wb.xlsx.writeBuffer(),blob=new Blob([buffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),url=URL.createObjectURL(blob),a=document.createElement('a'),d=new Date().toISOString().slice(0,10);a.href=url;a.download=`PIM_PM_CM_Report_${d}.xlsx`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);toast(`Excel berhasil dibuat: ${groups.length} rangkaian`);
+  }catch(err){console.error(err);toast('Gagal membuat Excel: '+err.message)}finally{if(button){button.disabled=false;button.innerHTML=button.dataset.text||'<b>Download Excel</b>'}}
+}
+
 document.addEventListener('DOMContentLoaded',init);
-</script></div></script>
-
+</script>
 </div>
-
-https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.jsscript>
-
-./manual-report.jsscript>
-
-</body></html>
+</body>
+</html>

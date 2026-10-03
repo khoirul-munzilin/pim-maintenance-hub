@@ -4,31 +4,30 @@ on:
   workflow_dispatch:
 
   schedule:
-    # GitHub Actions menggunakan UTC
-    # 00.30 UTC = 07.30 WIB
     - cron: "30 0 * * *"
 
 jobs:
   send-report:
-    name: *enerate and Send Daily Report
-    *uns-on: ubuntu-latest
+    name: Generate and Send Daily Report
+    runs-on: ubuntu-latest
 
     steps:
-*     - name: Ambil source code
-   *    uses: actions/checkout@v4
+      - name: Ambil source code
+        uses: actions/checkout@v4
 
-   *  - name: Siapkan Node.js 22
-     *  uses: actions/setup-node@v4
-    *   with:
-          node-version: "*2"
+      - name: Siapkan Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
-      - name: Install dependen*ies
+      - name: Install dependencies
         run: npm install
 
-    * - name: Buat dan kirim laporan Ex*el
+      - name: Buat dan kirim laporan Excel
         run: npm run report
-   *    env:
-          SUPABASE_URL: $*{ secrets.SUPABASE_URL }}
-        * SUPABASE_SECRET_KEY: ${{ secrets.*UPABASE_SECRET_KEY }}
-          GM*IL_USER: ${{ secrets.GMAIL_USER }}*          GMAIL_APP_PASSWORD: ${{ *ecrets.GMAIL_APP_PASSWORD }}
-     *    REPORT_EMAIL_TO: ${{ secrets.R*PORT_EMAIL_TO }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}

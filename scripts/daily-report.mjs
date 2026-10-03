@@ -1,27 +1,1159 @@
 import { createClient } from '@supabase/supabase-js';
 import ExcelJS from 'exceljs';
+import nodemailer from 'nodemailer';
 import sharp from 'sharp';
-import { Resend } from 'resend';
-const required=['SUPABASE_URL','SUPABASE_SECRET_KEY','RESEND_API_KEY','REPORT_EMAIL_FROM','REPORT_EMAIL_TO'];
-for(const k of required) if(!process.env[k]) throw new Error(`Secret ${k} belum diisi`);
-const supabase=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SECRET_KEY,{auth:{persistSession:false}});
-const resend=new Resend(process.env.RESEND_API_KEY);
-const now=new Date(); const end=new Date(now); end.setUTCHours(0,30,0,0); const start=new Date(end);start.setUTCDate(start.getUTCDate()-1);
-const {data:reports,error}=await supabase.from('work_reports').select(`*,functional_locations(funloc_code,description,area),creator:profiles!work_reports_created_by_fkey(full_name),assignee:profiles!work_reports_assigned_to_fkey(full_name),report_photos(*)`).gte('created_at',start.toISOString()).lt('created_at',end.toISOString()).order('created_at');
-if(error) throw error;
-const wb=new ExcelJS.Workbook();wb.creator='PIM Maintenance Hub';wb.created=now;
-const ws=wb.addWorksheet('Maintenance Report',{views:[{state:'frozen',ySplit:1,showGridLines:false}]});
-const headers=['No.','Nomor Laporan','Tanggal','Jenis','Functional Location','Area','Prioritas','Deskripsi / Temuan','Dampak Operasional','Status','Pelapor','Teknisi','Penyebab','Tindakan Perbaikan','Spare Part','Catatan Teknisi','Hasil Test','Catatan Verifikasi','Waktu Mulai','Request Verification','Waktu Closed'];
-ws.columns=headers.map((h,i)=>({header:h,key:`c${i}`,width:[7,23,22,12,42,18,13,38,30,15,20,22,30,38,25,32,17,32,21,22,21][i]}));
-ws.getRow(1).height=32;ws.getRow(1).eachCell(c=>{c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF163A5F'}};c.font={bold:true,color:{argb:'FFFFFFFF'}};c.alignment={horizontal:'center',vertical:'middle',wrapText:true}});ws.autoFilter={from:'A1',to:'U1'};
-const fmt=d=>d?new Date(d).toLocaleString('id-ID',{timeZone:'Asia/Jakarta'}):'';
-for(let i=0;i<reports.length;i++){const r=reports[i],row=ws.addRow([i+1,r.report_no,fmt(r.created_at),r.report_type,r.functional_locations?.funloc_code||'',r.functional_locations?.area||'',r.priority,r.description,r.operational_impact||'',r.status,r.creator?.full_name||'',r.assignee?.full_name||'',r.failure_cause||'',r.corrective_action||r.recommendation||'',r.spare_part||'',r.technician_note||'',r.test_result||'',r.verification_note||'',fmt(r.started_at),fmt(r.verification_requested_at),fmt(r.closed_at)]);row.height=45;row.eachCell(c=>c.alignment={vertical:'top',wrapText:true});const st=row.getCell(10);st.font={bold:true,color:{argb:r.status==='CLOSED'?'FF166534':'FF92400E'}};st.fill={type:'pattern',pattern:'solid',fgColor:{argb:r.status==='CLOSED'?'FFDCFCE7':'FFFEF3C7'}}}
-const doc=wb.addWorksheet('Dokumentasi',{views:[{showGridLines:false}]});doc.columns=[{width:34},{width:4},{width:34},{width:4},{width:34}];
-async function imageBuffer(path){const {data,error}=await supabase.storage.from('maintenance-photos').download(path);if(error)return null;return sharp(Buffer.from(await data.arrayBuffer())).rotate().resize({width:720,height:480,fit:'inside',withoutEnlargement:true}).jpeg({quality:65}).toBuffer()}
-for(let i=0;i<reports.length;i++){const r=reports[i],base=i*22+1;doc.mergeCells(base,1,base,5);const title=doc.getCell(base,1);title.value=`${r.report_no} • ${r.functional_locations?.funloc_code||''}`;title.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF163A5F'}};title.font={bold:true,color:{argb:'FFFFFFFF'},size:12};title.alignment={vertical:'middle'};doc.getRow(base).height=25;const groups=[['initial','Kondisi Awal',1],['result','Hasil Pekerjaan',3],['verification','Verifikasi',5]];
- for(const [type,label,col] of groups){const h=doc.getCell(base+1,col);h.value=label;h.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF0F766E'}};h.font={bold:true,color:{argb:'FFFFFFFF'}};h.alignment={horizontal:'center'};for(let rr=base+2;rr<=base+20;rr++)doc.getRow(rr).height=18;const photos=(r.report_photos||[]).filter(p=>p.photo_type===type).slice(0,1);if(!photos.length){doc.getCell(base+10,col).value='Foto belum tersedia';doc.getCell(base+10,col).alignment={horizontal:'center'};continue}const buf=await imageBuffer(photos[0].storage_path);if(buf){const id=wb.addImage({buffer:buf,extension:'jpeg'});doc.addImage(id,{tl:{col:col-1,row:base+1},br:{col:col,row:base+20},editAs:'oneCell'})}}
+
+/*
+|--------------------------------------------------------------------------
+| Pemeriksaan GitHub Secrets
+|--------------------------------------------------------------------------
+*/
+
+const REQUIRED_SECRETS = [
+  'SUPABASE_URL',
+  'SUPABASE_SECRET_KEY',
+  'GMAIL_USER',
+  'GMAIL_APP_PASSWORD',
+  'REPORT_EMAIL_TO'
+];
+
+for (const secretName of REQUIRED_SECRETS) {
+  if (!process.env[secretName]) {
+    throw new Error(`Secret ${secretName} belum diisi`);
+  }
 }
-const date=new Date(start).toLocaleDateString('en-CA',{timeZone:'Asia/Jakarta'}),file=`PIM_PM_CM_Report_${date}.xlsx`,buffer=await wb.xlsx.writeBuffer();
-const closed=reports.filter(r=>r.status==='CLOSED').length,pm=reports.filter(r=>r.report_type==='PM').length,cm=reports.filter(r=>r.report_type==='CM').length;
-await resend.emails.send({from:process.env.REPORT_EMAIL_FROM,to:process.env.REPORT_EMAIL_TO.split(',').map(x=>x.trim()),subject:`PIM PM & CM Report - ${date}`,html:`<p>Berikut laporan PM dan CM periode 07.30 WIB.</p><ul><li>Total: ${reports.length}</li><li>PM: ${pm}</li><li>CM: ${cm}</li><li>Closed: ${closed}</li></ul>`,attachments:[{filename:file,content:Buffer.from(buffer)}]});
-console.log(`Terkirim: ${file}, ${reports.length} laporan`);
+
+/*
+|--------------------------------------------------------------------------
+| Konfigurasi
+|--------------------------------------------------------------------------
+*/
+
+const PHOTO_BUCKET =
+  process.env.PHOTO_BUCKET || 'maintenance-photos';
+
+const TIME_ZONE = 'Asia/Jakarta';
+
+/*
+|--------------------------------------------------------------------------
+| Koneksi Supabase
+|--------------------------------------------------------------------------
+*/
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SECRET_KEY,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    }
+  }
+);
+
+/*
+|--------------------------------------------------------------------------
+| Koneksi Gmail SMTP
+|--------------------------------------------------------------------------
+*/
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD
+  }
+});
+
+/*
+|--------------------------------------------------------------------------
+| Menentukan Periode Laporan
+|--------------------------------------------------------------------------
+|
+| Periode laporan:
+| Kemarin pukul 07.30 WIB
+| sampai
+| Hari ini pukul 07.29 WIB
+|
+| 07.30 WIB = 00.30 UTC
+|
+*/
+
+function getReportPeriod() {
+  const now = new Date();
+
+  const end = new Date(now);
+
+  end.setUTCHours(0, 30, 0, 0);
+
+  /*
+   * Jika workflow dijalankan secara manual sebelum pukul 07.30 WIB,
+   * gunakan batas akhir hari sebelumnya.
+   */
+  if (now < end) {
+    end.setUTCDate(end.getUTCDate() - 1);
+  }
+
+  const start = new Date(end);
+
+  start.setUTCDate(start.getUTCDate() - 1);
+
+  return {
+    start,
+    end
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| Format Tanggal dan Jam
+|--------------------------------------------------------------------------
+*/
+
+function formatDateTime(value) {
+  if (!value) {
+    return '';
+  }
+
+  return new Intl.DateTimeFormat('id-ID', {
+    timeZone: TIME_ZONE,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(new Date(value));
+}
+
+/*
+|--------------------------------------------------------------------------
+| Format Tanggal untuk Nama File
+|--------------------------------------------------------------------------
+*/
+
+function formatDateForFile(value) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(value);
+
+  const dateParts = Object.fromEntries(
+    parts.map((part) => [part.type, part.value])
+  );
+
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Mengamankan Nilai Kosong
+|--------------------------------------------------------------------------
+*/
+
+function safeText(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return String(value);
+}
+
+/*
+|--------------------------------------------------------------------------
+| Format Border Excel
+|--------------------------------------------------------------------------
+*/
+
+function applyThinBorder(cell) {
+  cell.border = {
+    top: {
+      style: 'thin',
+      color: {
+        argb: 'FFD7DEE7'
+      }
+    },
+    left: {
+      style: 'thin',
+      color: {
+        argb: 'FFD7DEE7'
+      }
+    },
+    bottom: {
+      style: 'thin',
+      color: {
+        argb: 'FFD7DEE7'
+      }
+    },
+    right: {
+      style: 'thin',
+      color: {
+        argb: 'FFD7DEE7'
+      }
+    }
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| Mengambil dan Mengompres Foto
+|--------------------------------------------------------------------------
+*/
+
+async function downloadAndCompressImage(storagePath) {
+  try {
+    const { data, error } = await supabase.storage
+      .from(PHOTO_BUCKET)
+      .download(storagePath);
+
+    if (error || !data) {
+      console.warn(
+        `Foto tidak dapat diambil: ${storagePath}`,
+        error?.message || ''
+      );
+
+      return null;
+    }
+
+    const originalBuffer = Buffer.from(
+      await data.arrayBuffer()
+    );
+
+    /*
+     * Foto diperkecil agar ukuran Excel tidak terlalu besar.
+     */
+    const compressedBuffer = await sharp(originalBuffer)
+      .rotate()
+      .resize({
+        width: 900,
+        height: 650,
+        fit: 'inside',
+        withoutEnlargement: true
+      })
+      .jpeg({
+        quality: 68,
+        mozjpeg: true
+      })
+      .toBuffer();
+
+    return compressedBuffer;
+  } catch (error) {
+    console.warn(
+      `Gagal memproses foto: ${storagePath}`,
+      error.message
+    );
+
+    return null;
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Mengambil Data Laporan dari Supabase
+|--------------------------------------------------------------------------
+*/
+
+async function fetchReports(start, end) {
+  const query = `
+    *,
+    functional_locations (
+      funloc_code,
+      description,
+      area
+    ),
+    creator:profiles!work_reports_created_by_fkey (
+      full_name
+    ),
+    assignee:profiles!work_reports_assigned_to_fkey (
+      full_name
+    ),
+    report_photos (
+      id,
+      storage_path,
+      photo_type,
+      created_at
+    )
+  `;
+
+  const { data, error } = await supabase
+    .from('work_reports')
+    .select(query)
+    .gte('created_at', start.toISOString())
+    .lt('created_at', end.toISOString())
+    .order('created_at', {
+      ascending: true
+    });
+
+  if (error) {
+    throw new Error(
+      `Gagal mengambil laporan Supabase: ${error.message}`
+    );
+  }
+
+  return data || [];
+}
+
+/*
+|--------------------------------------------------------------------------
+| Membuat Sheet Maintenance Report
+|--------------------------------------------------------------------------
+*/
+
+function createMaintenanceSheet(workbook, reports) {
+  const worksheet = workbook.addWorksheet(
+    'Maintenance Report',
+    {
+      views: [
+        {
+          state: 'frozen',
+          ySplit: 1,
+          showGridLines: false
+        }
+      ]
+    }
+  );
+
+  const headers = [
+    'No.',
+    'Nomor Laporan',
+    'Tanggal',
+    'Jenis',
+    'Functional Location',
+    'Deskripsi Lokasi',
+    'Area',
+    'Prioritas',
+    'Deskripsi / Temuan',
+    'Dampak Operasional',
+    'Status',
+    'Pelapor',
+    'Teknisi',
+    'Penyebab',
+    'Tindakan Perbaikan',
+    'Spare Part',
+    'Catatan Teknisi',
+    'Hasil Test',
+    'Catatan Verifikasi',
+    'Waktu Mulai',
+    'Request Verification',
+    'Waktu Closed'
+  ];
+
+  const columnWidths = [
+    7,
+    24,
+    22,
+    12,
+    42,
+    30,
+    18,
+    14,
+    40,
+    32,
+    18,
+    22,
+    22,
+    32,
+    40,
+    28,
+    34,
+    20,
+    34,
+    22,
+    24,
+    22
+  ];
+
+  worksheet.columns = headers.map(
+    (header, index) => ({
+      header,
+      key: `column_${index + 1}`,
+      width: columnWidths[index]
+    })
+  );
+
+  /*
+   * Pengaturan header.
+   */
+  worksheet.getRow(1).height = 34;
+
+  worksheet.autoFilter = {
+    from: 'A1',
+    to: `V${Math.max(reports.length + 1, 1)}`
+  };
+
+  worksheet.getRow(1).eachCell((cell) => {
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: {
+        argb: 'FF163A5F'
+      }
+    };
+
+    cell.font = {
+      bold: true,
+      color: {
+        argb: 'FFFFFFFF'
+      },
+      size: 10
+    };
+
+    cell.alignment = {
+      horizontal: 'center',
+      vertical: 'middle',
+      wrapText: true
+    };
+
+    applyThinBorder(cell);
+  });
+
+  /*
+   * Memasukkan laporan ke Excel.
+   */
+  reports.forEach((report, index) => {
+    const row = worksheet.addRow([
+      index + 1,
+      safeText(report.report_no),
+      formatDateTime(report.created_at),
+      safeText(report.report_type),
+      safeText(
+        report.functional_locations?.funloc_code
+      ),
+      safeText(
+        report.functional_locations?.description
+      ),
+      safeText(
+        report.functional_locations?.area
+      ),
+      safeText(report.priority),
+      safeText(report.description),
+      safeText(report.operational_impact),
+      safeText(report.status),
+      safeText(report.creator?.full_name),
+      safeText(report.assignee?.full_name),
+      safeText(report.failure_cause),
+      safeText(
+        report.corrective_action ||
+        report.recommendation
+      ),
+      safeText(report.spare_part),
+      safeText(report.technician_note),
+      safeText(report.test_result),
+      safeText(report.verification_note),
+      formatDateTime(report.started_at),
+      formatDateTime(
+        report.verification_requested_at
+      ),
+      formatDateTime(report.closed_at)
+    ]);
+
+    row.height = 48;
+
+    row.eachCell(
+      {
+        includeEmpty: true
+      },
+      (cell) => {
+        cell.alignment = {
+          vertical: 'top',
+          wrapText: true
+        };
+
+        cell.font = {
+          size: 10,
+          color: {
+            argb: 'FF111827'
+          }
+        };
+
+        applyThinBorder(cell);
+      }
+    );
+
+    /*
+     * Warna status.
+     */
+    const statusCell = row.getCell(11);
+
+    const status = safeText(
+      report.status
+    ).toUpperCase();
+
+    if (status === 'CLOSED') {
+      statusCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: {
+          argb: 'FFDCFCE7'
+        }
+      };
+
+      statusCell.font = {
+        bold: true,
+        color: {
+          argb: 'FF166534'
+        }
+      };
+    } else if (
+      status.includes('PROGRESS') ||
+      status.includes('ASSIGNED')
+    ) {
+      statusCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: {
+          argb: 'FFDBEAFE'
+        }
+      };
+
+      statusCell.font = {
+        bold: true,
+        color: {
+          argb: 'FF1D4ED8'
+        }
+      };
+    } else {
+      statusCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: {
+          argb: 'FFFEF3C7'
+        }
+      };
+
+      statusCell.font = {
+        bold: true,
+        color: {
+          argb: 'FF92400E'
+        }
+      };
+    }
+  });
+
+  /*
+   * Pengaturan halaman cetak.
+   */
+  worksheet.pageSetup = {
+    orientation: 'landscape',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    paperSize: 9,
+    margins: {
+      left: 0.25,
+      right: 0.25,
+      top: 0.5,
+      bottom: 0.5,
+      header: 0.2,
+      footer: 0.2
+    }
+  };
+
+  return worksheet;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Membuat Sheet Dokumentasi
+|--------------------------------------------------------------------------
+*/
+
+async function createDocumentationSheet(
+  workbook,
+  reports
+) {
+  const worksheet = workbook.addWorksheet(
+    'Dokumentasi',
+    {
+      views: [
+        {
+          showGridLines: false
+        }
+      ]
+    }
+  );
+
+  /*
+   * Kolom A, C, dan E digunakan untuk foto.
+   * Kolom B dan D digunakan sebagai pemisah.
+   */
+  worksheet.getColumn('A').width = 36;
+  worksheet.getColumn('B').width = 4;
+  worksheet.getColumn('C').width = 36;
+  worksheet.getColumn('D').width = 4;
+  worksheet.getColumn('E').width = 36;
+
+  const categories = [
+    {
+      type: 'initial',
+      label: 'Kondisi Awal',
+      column: 1
+    },
+    {
+      type: 'result',
+      label: 'Hasil Pekerjaan',
+      column: 3
+    },
+    {
+      type: 'verification',
+      label: 'Verifikasi',
+      column: 5
+    }
+  ];
+
+  /*
+   * Jika tidak ada laporan.
+   */
+  if (reports.length === 0) {
+    worksheet.mergeCells('A1:E3');
+
+    const emptyCell = worksheet.getCell('A1');
+
+    emptyCell.value =
+      'Tidak ada laporan pada periode ini.';
+
+    emptyCell.alignment = {
+      horizontal: 'center',
+      vertical: 'middle'
+    };
+
+    emptyCell.font = {
+      italic: true,
+      color: {
+        argb: 'FF64748B'
+      }
+    };
+
+    return worksheet;
+  }
+
+  /*
+   * Membuat satu blok dokumentasi
+   * untuk setiap laporan.
+   */
+  for (
+    let index = 0;
+    index < reports.length;
+    index += 1
+  ) {
+    const report = reports[index];
+
+    const startRow = index * 23 + 1;
+
+    const endImageRow = startRow + 20;
+
+    /*
+     * Judul laporan.
+     */
+    worksheet.mergeCells(
+      startRow,
+      1,
+      startRow,
+      5
+    );
+
+    const reportTitle = worksheet.getCell(
+      startRow,
+      1
+    );
+
+    reportTitle.value =
+      `${safeText(report.report_no)} • ` +
+      `${safeText(
+        report.functional_locations?.funloc_code
+      )}`;
+
+    reportTitle.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: {
+        argb: 'FF163A5F'
+      }
+    };
+
+    reportTitle.font = {
+      bold: true,
+      color: {
+        argb: 'FFFFFFFF'
+      },
+      size: 12
+    };
+
+    reportTitle.alignment = {
+      vertical: 'middle'
+    };
+
+    worksheet.getRow(startRow).height = 26;
+
+    /*
+     * Membuat tiga bagian foto.
+     */
+    for (const category of categories) {
+      const heading = worksheet.getCell(
+        startRow + 1,
+        category.column
+      );
+
+      heading.value = category.label;
+
+      heading.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: {
+          argb: 'FF0F766E'
+        }
+      };
+
+      heading.font = {
+        bold: true,
+        color: {
+          argb: 'FFFFFFFF'
+        }
+      };
+
+      heading.alignment = {
+        horizontal: 'center',
+        vertical: 'middle'
+      };
+
+      /*
+       * Membuat ruang untuk foto.
+       */
+      for (
+        let rowNumber = startRow + 2;
+        rowNumber <= endImageRow;
+        rowNumber += 1
+      ) {
+        worksheet.getRow(rowNumber).height = 18;
+
+        const photoAreaCell = worksheet.getCell(
+          rowNumber,
+          category.column
+        );
+
+        photoAreaCell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: {
+            argb: 'FFF8FAFC'
+          }
+        };
+
+        applyThinBorder(photoAreaCell);
+      }
+
+      /*
+       * Memilih foto sesuai tipe.
+       */
+      const categoryPhotos = (
+        report.report_photos || []
+      )
+        .filter(
+          (photo) =>
+            photo.photo_type === category.type
+        )
+        .sort(
+          (firstPhoto, secondPhoto) =>
+            new Date(firstPhoto.created_at) -
+            new Date(secondPhoto.created_at)
+        );
+
+      /*
+       * Versi awal memasukkan maksimal satu foto
+       * untuk setiap kategori.
+       */
+      const selectedPhoto = categoryPhotos[0];
+
+      if (!selectedPhoto) {
+        const noPhotoCell = worksheet.getCell(
+          startRow + 10,
+          category.column
+        );
+
+        noPhotoCell.value =
+          'Foto belum tersedia';
+
+        noPhotoCell.font = {
+          italic: true,
+          color: {
+            argb: 'FF64748B'
+          }
+        };
+
+        noPhotoCell.alignment = {
+          horizontal: 'center',
+          vertical: 'middle'
+        };
+
+        continue;
+      }
+
+      const imageBuffer =
+        await downloadAndCompressImage(
+          selectedPhoto.storage_path
+        );
+
+      if (!imageBuffer) {
+        const failedPhotoCell =
+          worksheet.getCell(
+            startRow + 10,
+            category.column
+          );
+
+        failedPhotoCell.value =
+          'Foto tidak dapat dimuat';
+
+        failedPhotoCell.font = {
+          italic: true,
+          color: {
+            argb: 'FFB91C1C'
+          }
+        };
+
+        failedPhotoCell.alignment = {
+          horizontal: 'center',
+          vertical: 'middle'
+        };
+
+        continue;
+      }
+
+      /*
+       * Menambahkan gambar ke workbook.
+       */
+      const imageId = workbook.addImage({
+        buffer: imageBuffer,
+        extension: 'jpeg'
+      });
+
+      /*
+       * Menempatkan gambar di kolom yang sesuai.
+       */
+      worksheet.addImage(imageId, {
+        tl: {
+          col:
+            category.column -
+            1 +
+            0.05,
+          row:
+            startRow +
+            1 +
+            0.15
+        },
+        br: {
+          col:
+            category.column -
+            0.05,
+          row:
+            endImageRow +
+            0.85
+        },
+        editAs: 'oneCell'
+      });
+    }
+
+    /*
+     * Catatan laporan di bawah foto.
+     */
+    worksheet.mergeCells(
+      startRow + 21,
+      1,
+      startRow + 21,
+      5
+    );
+
+    const noteCell = worksheet.getCell(
+      startRow + 21,
+      1
+    );
+
+    noteCell.value =
+      `Deskripsi: ${safeText(
+        report.description
+      )} | ` +
+      `Status: ${safeText(
+        report.status
+      )}`;
+
+    noteCell.font = {
+      size: 9,
+      color: {
+        argb: 'FF475569'
+      }
+    };
+
+    noteCell.alignment = {
+      wrapText: true,
+      vertical: 'middle'
+    };
+
+    worksheet.getRow(
+      startRow + 21
+    ).height = 28;
+  }
+
+  /*
+   * Pengaturan cetak dokumentasi.
+   */
+  worksheet.pageSetup = {
+    orientation: 'landscape',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    paperSize: 9,
+    margins: {
+      left: 0.25,
+      right: 0.25,
+      top: 0.5,
+      bottom: 0.5,
+      header: 0.2,
+      footer: 0.2
+    }
+  };
+
+  return worksheet;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Proses Utama
+|--------------------------------------------------------------------------
+*/
+
+async function main() {
+  /*
+   * Menentukan periode report.
+   */
+  const {
+    start,
+    end
+  } = getReportPeriod();
+
+  console.log(
+    `Periode laporan: ` +
+    `${start.toISOString()} sampai ` +
+    `${end.toISOString()}`
+  );
+
+  /*
+   * Mengambil data Supabase.
+   */
+  const reports = await fetchReports(
+    start,
+    end
+  );
+
+  console.log(
+    `Jumlah laporan ditemukan: ` +
+    `${reports.length}`
+  );
+
+  /*
+   * Membuat workbook Excel.
+   */
+  const workbook = new ExcelJS.Workbook();
+
+  workbook.creator =
+    'PIM Maintenance Hub';
+
+  workbook.company =
+    'PT Padi Indonesia Maju';
+
+  workbook.created = new Date();
+
+  workbook.modified = new Date();
+
+  /*
+   * Membuat sheet laporan dan dokumentasi.
+   */
+  createMaintenanceSheet(
+    workbook,
+    reports
+  );
+
+  await createDocumentationSheet(
+    workbook,
+    reports
+  );
+
+  /*
+   * Menentukan nama file report.
+   */
+  const reportDate =
+    formatDateForFile(start);
+
+  const fileName =
+    `PIM_PM_CM_Report_${reportDate}.xlsx`;
+
+  /*
+   * Mengubah workbook menjadi buffer
+   * untuk dilampirkan ke email.
+   */
+  const excelBuffer =
+    await workbook.xlsx.writeBuffer();
+
+  /*
+   * Menghitung ringkasan.
+   */
+  const totalPM = reports.filter(
+    (report) =>
+      report.report_type === 'PM'
+  ).length;
+
+  const totalCM = reports.filter(
+    (report) =>
+      report.report_type === 'CM'
+  ).length;
+
+  const totalClosed = reports.filter(
+    (report) =>
+      safeText(
+        report.status
+      ).toUpperCase() === 'CLOSED'
+  ).length;
+
+  const totalOpen =
+    reports.length - totalClosed;
+
+  /*
+   * Memastikan koneksi Gmail berhasil.
+   */
+  console.log(
+    'Memeriksa koneksi Gmail SMTP...'
+  );
+
+  await transporter.verify();
+
+  console.log(
+    'Koneksi Gmail SMTP berhasil.'
+  );
+
+  /*
+   * Menyiapkan alamat penerima.
+   */
+  const emailRecipients =
+    process.env.REPORT_EMAIL_TO
+      .split(',')
+      .map((email) => email.trim())
+      .filter(Boolean)
+      .join(',');
+
+  /*
+   * Mengirim email.
+   */
+  const result =
+    await transporter.sendMail({
+      from:
+        `PIM Maintenance Hub ` +
+        `<${process.env.GMAIL_USER}>`,
+
+      to: emailRecipients,
+
+      subject:
+        `PIM PM & CM Report - ` +
+        `${reportDate}`,
+
+      html: `
+        <p>Yth. Bapak/Ibu,</p>
+
+        <p>
+          Berikut kami sampaikan laporan
+          pekerjaan Preventive Maintenance
+          dan Corrective Maintenance
+          periode pukul 07.30 WIB.
+        </p>
+
+        <h3>Ringkasan Laporan</h3>
+
+        <ul>
+          <li>
+            Total laporan:
+            <b>${reports.length}</b>
+          </li>
+
+          <li>
+            Preventive Maintenance:
+            <b>${totalPM}</b>
+          </li>
+
+          <li>
+            Corrective Maintenance:
+            <b>${totalCM}</b>
+          </li>
+
+          <li>
+            Pekerjaan terbuka:
+            <b>${totalOpen}</b>
+          </li>
+
+          <li>
+            Pekerjaan selesai:
+            <b>${totalClosed}</b>
+          </li>
+        </ul>
+
+        <p>
+          File Excel lengkap beserta
+          dokumentasi foto terlampir
+          pada email ini.
+        </p>
+
+        <p>
+          Email ini dikirim otomatis oleh
+          PIM Maintenance Hub.
+        </p>
+      `,
+
+      attachments: [
+        {
+          filename: fileName,
+
+          content:
+            Buffer.from(excelBuffer),
+
+          contentType:
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        }
+      ]
+    });
+
+  /*
+   * Menampilkan informasi keberhasilan
+   * di log GitHub Actions.
+   */
+  console.log(
+    `Email berhasil dikirim dari ` +
+    `${process.env.GMAIL_USER}`
+  );
+
+  console.log(
+    `Penerima: ${emailRecipients}`
+  );
+
+  console.log(
+    `Message ID: ${result.messageId}`
+  );
+
+  console.log(
+    `Lampiran: ${fileName}`
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| Menjalankan Proses
+|--------------------------------------------------------------------------
+*/
+
+main().catch((error) => {
+  console.error(
+    'Gagal membuat atau mengirim laporan:'
+  );
+
+  console.error(error);
+
+  process.exit(1);
+});

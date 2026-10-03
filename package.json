@@ -1,0 +1,1 @@
+{"name":"pim-maintenance-report","private":true,"type":"module","scripts":{"report":"node scripts/daily-report.mjs"},"dependencies":{"@supabase/supabase-js":"^2.75.0","exceljs":"^4.4.0","resend":"^6.0.0","sharp":"^0.34.0"}}

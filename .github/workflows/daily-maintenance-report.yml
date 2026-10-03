@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
 
   schedule:
+    # GitHub Actions menggunakan UTC
+    # 00.30 UTC = 07.30 WIB
     - cron: "30 0 * * *"
 
 jobs:

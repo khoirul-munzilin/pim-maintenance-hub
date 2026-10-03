@@ -3,34 +3,33 @@ name: Daily PM CM Excel Report
 on:
   schedule:
     # GitHub Actions menggunakan UTC
-    # 00.30 UTC = 07.30 WIB
+    # 00.30 UTC sama dengan 07.30 WIB
     - cron: "30 0 * * *"
 
-  # Agar workflow bisa dijalankan manual dari menu Actions
-  workflow_dispatch:
+  # Workflow juga dapat dijalan*an secara manual
+  workflow_dispat*h:
 
 jobs:
   send-report:
-    name: Generate and Send Daily Report
-    runs-on: ubuntu-latest
+    name:*Generate and Send Daily Report
+   *runs-on: ubuntu-latest
 
-    steps:
-      - name: Ambil source code
-        uses: actions/checkout@v4
+    steps:*      - name: Ambil source code
+  *     uses: actions/checkout@v4
 
-      - name: Siapkan Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+  *   - name: Siapkan Node.js
+       *uses: actions/setup-node@v4
+      * with:
+          node-version: "20*
 
-      - name: Install dependencies
+      - name: Install dependenci*s
         run: npm install
 
-      - name: Buat dan kirim laporan Excel
+      * name: Buat dan kirim laporan Exce*
         run: npm run report
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
-          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+     *  env:
+          SUPABASE_URL: ${{*secrets.SUPABASE_URL }}
+          *UPABASE_SECRET_KEY: ${{ secrets.SU*ABASE_SECRET_KEY }}
+          GMAI*_USER: ${{ secrets.GMAIL_USER }}
+ *        GMAIL_APP_PASSWORD: ${{ se*rets.GMAIL_APP_PASSWORD }}
+       *  REPORT_EMAIL_TO: ${{ secrets.REP*RT_EMAIL_TO }}

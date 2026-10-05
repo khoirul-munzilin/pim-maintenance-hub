@@ -1,4 +1,4 @@
-/* PIM Maintenance Hub - EIPA Module v2026.10.06.4 */
+/* PIM Maintenance Hub - EIPA Module v2026.10.06.5 */
 const EIPA_GENERIC_FUNLOC = 'ID-MJK-EIPA-GENERAL';
 let eipaRows = [];
 let eipaEvidenceZip = null;
@@ -111,9 +111,10 @@ async function uploadEipaEvidence(){
         const base=(name.split('/').pop()||`photo-${processed}.${ext}`).replace(/[^a-zA-Z0-9._-]/g,'_');
         const path=`${user.id}/eipa/${report.report_no}/${base}`;
         if(existingPaths.has(path)){ skipped++; continue; }
-        const blob=await entry.async('blob');
         const contentType=ext==='png'?'image/png':ext==='webp'?'image/webp':'image/jpeg';
-        const {error:upErr}=await timeout(db.storage.from('maintenance-photos').upload(path,blob,{upsert:false,contentType})); if(upErr)throw upErr;
+        const bytes=await entry.async('uint8array');
+        const imageBlob=new Blob([bytes],{type:contentType});
+        const {error:upErr}=await timeout(db.storage.from('maintenance-photos').upload(path,imageBlob,{upsert:false,contentType,cacheControl:'3600'})); if(upErr)throw upErr;
         const {error:metaErr}=await timeout(db.from('report_photos').insert({report_id:report.id,storage_path:path,photo_type:'initial',uploaded_by:user.id}));
         if(metaErr){ await db.storage.from('maintenance-photos').remove([path]); throw metaErr; }
         existingPaths.add(path); ok++;
@@ -124,7 +125,7 @@ async function uploadEipaEvidence(){
         const detailText=`${name}: ${rawMessage}${status ? ` (status ${status})` : ''}`;
         errors.push(detailText);
         console.error('EIPA upload failed',name,fileError);
-        const stopMessage=`UPLOAD DIHENTIKAN pada file 1 untuk diagnosis. Error Supabase: ${detailText}`;
+        const stopMessage=`Upload dihentikan. Error Supabase: ${detailText}`;
         setEipaMessage(stopMessage,'error'); toast(stopMessage);
         return;
       }

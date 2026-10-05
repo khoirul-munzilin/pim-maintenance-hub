@@ -85,19 +85,44 @@ async function readEipaZip(input){
   try{eipaEvidenceZip=await JSZip.loadAsync(file); const names=Object.keys(eipaEvidenceZip.files).filter(n=>!eipaEvidenceZip.files[n].dir); document.getElementById('eipaZipCount').textContent=names.length; document.getElementById('eipaUploadButton').disabled=!names.length; setEipaMessage(`${names.length} foto ditemukan dalam ZIP.`,'success');}catch(e){setEipaMessage('ZIP tidak dapat dibaca: '+e.message,'error');}
 }
 async function uploadEipaEvidence(){
-  if(!eipaAllowed()||!eipaEvidenceZip)return;
-  const button=document.getElementById('eipaUploadButton'); button.disabled=true;
+  if(!eipaAllowed()){ setEipaMessage('Hanya Admin atau Supervisor yang dapat mengunggah evidence.','error'); return; }
+  if(!eipaEvidenceZip){ setEipaMessage('Pilih file ZIP evidence terlebih dahulu.','error'); return; }
+  const button=document.getElementById('eipaUploadButton');
+  const original=button.textContent; button.disabled=true;
+  const timeout=(promise,ms=60000)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Timeout lebih dari 60 detik')),ms))]);
   try{
-    const {data:{user}}=await db.auth.getUser(); const {data:reports,error}=await db.from('work_reports').select('id,eipa_finding_no,report_no').eq('source_type','EIPA'); if(error)throw error;
-    const byNo=new Map((reports||[]).map(r=>[Number(r.eipa_finding_no),r])); let ok=0,skip=0;
-    for(const [name,entry] of Object.entries(eipaEvidenceZip.files)){
-      if(entry.dir)continue; const m=name.match(/(?:^|\/)(\d{1,2})(?:\/|$)|EIPA-(\d{3})/i); const no=Number(m?.[1]||m?.[2]); const report=byNo.get(no); if(!report){skip++;continue;}
-      const blob=await entry.async('blob'); if(!blob.type.startsWith('image/')&&!/\.(jpg|jpeg|png|webp)$/i.test(name)){skip++;continue;}
-      const ext=(name.split('.').pop()||'jpg').toLowerCase(); const path=`${user.id}/eipa/${report.report_no}/${Date.now()}-${ok}.${ext}`;
-      const {error:upErr}=await db.storage.from('maintenance-photos').upload(path,blob,{upsert:false,contentType:blob.type||'image/jpeg'}); if(upErr){console.error(upErr);skip++;continue;}
-      const {error:metaErr}=await db.from('report_photos').insert({report_id:report.id,storage_path:path,photo_type:'initial',uploaded_by:user.id}); if(metaErr){console.error(metaErr);skip++;continue;} ok++;
+    const {data:{user},error:userError}=await db.auth.getUser(); if(userError||!user)throw userError||new Error('Sesi login tidak ditemukan.');
+    const {data:reports,error}=await db.from('work_reports').select('id,eipa_finding_no,report_no').eq('source_type','EIPA'); if(error)throw error;
+    const byNo=new Map((reports||[]).map(r=>[Number(r.eipa_finding_no),r]));
+    const {data:existing,error:existingError}=await db.from('report_photos').select('storage_path,report_id').like('storage_path',`${user.id}/eipa/%`); if(existingError)throw existingError;
+    const existingPaths=new Set((existing||[]).map(x=>x.storage_path));
+    const entries=Object.entries(eipaEvidenceZip.files).filter(([,entry])=>!entry.dir);
+    let ok=0,skipped=0,failed=0,processed=0; const errors=[];
+    setEipaMessage(`Memulai upload ${entries.length} file. Jangan tutup halaman.`,'info');
+    for(const [name,entry] of entries){
+      processed++; button.textContent=`Mengunggah ${processed}/${entries.length}`;
+      setEipaMessage(`Mengunggah ${processed}/${entries.length}. Berhasil ${ok}, dilewati ${skipped}, gagal ${failed}.`,'info');
+      await new Promise(resolve=>setTimeout(resolve,0));
+      try{
+        const m=name.match(/(?:^|\/)(\d{1,2})(?:\/|$)|EIPA-(\d{3})/i); const no=Number(m?.[1]||m?.[2]); const report=byNo.get(no);
+        if(!report){ skipped++; continue; }
+        if(!/\.(jpg|jpeg|png|webp)$/i.test(name)){ skipped++; continue; }
+        const ext=(name.split('.').pop()||'jpg').toLowerCase();
+        const base=(name.split('/').pop()||`photo-${processed}.${ext}`).replace(/[^a-zA-Z0-9._-]/g,'_');
+        const path=`${user.id}/eipa/${report.report_no}/${base}`;
+        if(existingPaths.has(path)){ skipped++; continue; }
+        const blob=await entry.async('blob');
+        const contentType=ext==='png'?'image/png':ext==='webp'?'image/webp':'image/jpeg';
+        const {error:upErr}=await timeout(db.storage.from('maintenance-photos').upload(path,blob,{upsert:false,contentType})); if(upErr)throw upErr;
+        const {error:metaErr}=await timeout(db.from('report_photos').insert({report_id:report.id,storage_path:path,photo_type:'initial',uploaded_by:user.id}));
+        if(metaErr){ await db.storage.from('maintenance-photos').remove([path]); throw metaErr; }
+        existingPaths.add(path); ok++;
+      }catch(fileError){ failed++; errors.push(`${name}: ${fileError.message}`); console.error('EIPA upload failed',name,fileError); }
     }
-    setEipaMessage(`Upload evidence selesai. Berhasil ${ok}, dilewati/gagal ${skip}.`,skip?'info':'success');
-  }catch(e){setEipaMessage(e.message,'error');}finally{button.disabled=false;}
+    const result=`Upload evidence selesai. Berhasil ${ok}, sudah ada/dilewati ${skipped}, gagal ${failed}.`;
+    setEipaMessage(result,failed?'error':'success'); toast(result);
+    if(errors.length) console.table(errors);
+  }catch(e){ const message='Upload evidence berhenti: '+(e.message||String(e)); setEipaMessage(message,'error'); toast(message); console.error(e); }
+  finally{ button.disabled=false; button.textContent=original; }
 }
 window.loadEipaDashboard=loadEipaDashboard; window.renderEipaTable=renderEipaTable; window.previewEipaExcel=previewEipaExcel; window.importEipa=importEipa; window.readEipaZip=readEipaZip; window.uploadEipaEvidence=uploadEipaEvidence; window.openEipa=openEipa;

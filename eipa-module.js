@@ -1,9 +1,9 @@
-/* PIM Maintenance Hub - EIPA Module */
+/* PIM Maintenance Hub - EIPA Module v2026.10.06.1 */
 const EIPA_GENERIC_FUNLOC = 'ID-MJK-EIPA-GENERAL';
 let eipaRows = [];
 let eipaEvidenceZip = null;
 
-function eipaAllowed(){ return ['admin','supervisor'].includes(profile?.role); }
+function eipaAllowed(){ return ['admin','supervisor'].includes(String(profile?.role||'').trim().toLowerCase()); }
 function eipaText(v){ return v === null || v === undefined ? '' : String(v).trim(); }
 function eipaDate(v){
   if(!v) return null;

@@ -1,4 +1,4 @@
-/* PIM Maintenance Hub - EIPA Module v2026.10.06.2 */
+/* PIM Maintenance Hub - EIPA Module v2026.10.06.4 */
 const EIPA_GENERIC_FUNLOC = 'ID-MJK-EIPA-GENERAL';
 let eipaRows = [];
 let eipaEvidenceZip = null;
@@ -117,7 +117,17 @@ async function uploadEipaEvidence(){
         const {error:metaErr}=await timeout(db.from('report_photos').insert({report_id:report.id,storage_path:path,photo_type:'initial',uploaded_by:user.id}));
         if(metaErr){ await db.storage.from('maintenance-photos').remove([path]); throw metaErr; }
         existingPaths.add(path); ok++;
-      }catch(fileError){ failed++; errors.push(`${name}: ${fileError.message}`); console.error('EIPA upload failed',name,fileError); }
+      }catch(fileError){
+        failed++;
+        const rawMessage=fileError?.message||fileError?.error||String(fileError);
+        const status=fileError?.statusCode||fileError?.status||'';
+        const detailText=`${name}: ${rawMessage}${status ? ` (status ${status})` : ''}`;
+        errors.push(detailText);
+        console.error('EIPA upload failed',name,fileError);
+        const stopMessage=`UPLOAD DIHENTIKAN pada file 1 untuk diagnosis. Error Supabase: ${detailText}`;
+        setEipaMessage(stopMessage,'error'); toast(stopMessage);
+        return;
+      }
     }
     const detail=errors.length ? ` Penyebab pertama: ${errors[0]}` : '';
     const result=`Upload evidence selesai. Berhasil ${ok}, sudah ada/dilewati ${skipped}, gagal ${failed}.${detail}`;

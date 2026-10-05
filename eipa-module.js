@@ -1,4 +1,4 @@
-/* PIM Maintenance Hub - EIPA Module v2026.10.06.1 */
+/* PIM Maintenance Hub - EIPA Module v2026.10.06.2 */
 const EIPA_GENERIC_FUNLOC = 'ID-MJK-EIPA-GENERAL';
 let eipaRows = [];
 let eipaEvidenceZip = null;
@@ -119,7 +119,8 @@ async function uploadEipaEvidence(){
         existingPaths.add(path); ok++;
       }catch(fileError){ failed++; errors.push(`${name}: ${fileError.message}`); console.error('EIPA upload failed',name,fileError); }
     }
-    const result=`Upload evidence selesai. Berhasil ${ok}, sudah ada/dilewati ${skipped}, gagal ${failed}.`;
+    const detail=errors.length ? ` Penyebab pertama: ${errors[0]}` : '';
+    const result=`Upload evidence selesai. Berhasil ${ok}, sudah ada/dilewati ${skipped}, gagal ${failed}.${detail}`;
     setEipaMessage(result,failed?'error':'success'); toast(result);
     if(errors.length) console.table(errors);
   }catch(e){ const message='Upload evidence berhenti: '+(e.message||String(e)); setEipaMessage(message,'error'); toast(message); console.error(e); }
